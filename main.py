@@ -1,8 +1,10 @@
 import re
 import unicodedata
+
 import nltk
-import pandas as pd
 nltk.download('stopwords', quiet=True)
+
+import pandas as pd
 from nltk.corpus import stopwords
 from tqdm import tqdm
 import os
@@ -26,6 +28,45 @@ ABBREV_MAP = {
     r'\blata\b': 'lata',
 }
 
+g_save_normalized = False
+g_save_predictions = False
+
+g_catalog = []
+g_queries = []
+g_queries_val = []
+g_queries_test = []
+
+g_normalized_queries = []
+g_normalized_queries_val = []
+g_normalized_queries_test = []
+
+g_products_available_ids = []
+g_normalized_original_product_names = []
+
+tfidf_vectorizer = TfidfVectorizer()
+
+g_similarity_vocabulary_matrix = []
+
+g_tokenized_original_product_names = []
+bm25 = []
+
+def read_csvs() -> None:
+    global g_catalog, g_queries_val, g_queries_test, g_queries
+    
+    g_catalog = pd.read_csv('non_normalized/catalog.csv')
+    g_queries_val = pd.read_csv('non_normalized/queries_val.csv')
+    g_queries_test = pd.read_csv('non_normalized/queries_test.csv')
+    g_queries = pd.read_csv('non_normalized/queries.csv')    
+        
+def configure_attributes() -> None:
+    global g_products_available_ids, g_normalized_original_product_names, bm25
+
+    g_products_available_ids = g_catalog['product_id'].to_list()
+    g_normalized_original_product_names = g_catalog['product_name'].to_list()
+    
+    tokenized_original_product_names = [doc.split() for doc in g_normalized_original_product_names]
+    bm25 = BM25Okapi(tokenized_original_product_names)
+    
 def normalize(text: str) -> str:
     text = text.lower()
     text = unicodedata.normalize('NFKD', text)
@@ -35,32 +76,40 @@ def normalize(text: str) -> str:
     text = re.sub(r'[^a-z0-9\s]', ' ', text)
     tokens = text.split()
     tokens = [t for t in tokens if t not in STOPWORDS_PT and t != '']
-    return ' '.join(tokens)
+    return ' '.join(tokens)   
 
-def normalize_batch(texts: list, desc: str = 'Normalizando') -> list:
-    return [normalize(t) for t in tqdm(texts, desc=desc)]
-
-def search_tfidf(query: str, vectorizer, catalog_matrix, product_ids, catalog, top_k: int = 5):
+def normalize_data() -> None:
+    global g_normalized_queries, g_normalized_queries_val, g_normalized_queries_test
+    
+    g_normalized_queries = [normalize(t) for t in tqdm(g_queries['text'], desc='Normalizing Queries')]
+    g_normalized_queries_val = [normalize(t) for t in tqdm(g_queries_val['text'], desc='Normalizing Validation Queries')]
+    g_normalized_queries_test = [normalize(t) for t in tqdm(g_queries_test['text'], desc='Normalizing Test Queries')]
+    
+    if g_save_normalized:
+        g_normalized_queries.to_csv('normalized/queries_val.csv', index=False)
+        g_normalized_queries_val.to_csv('normalized/queries_test.csv', index=False)
+        g_normalized_queries_test.to_csv('normalized/queries.csv', index=False)
+    
+def search_tfidf(query: str, vectorizer, catalog_matrix, product_ids, product_names, top_k: int = 5):
     query_vec = vectorizer.transform([query])
     scores = cosine_similarity(query_vec, catalog_matrix).flatten()
     top_indices = np.argsort(scores)[::-1][:top_k]
-    return [(product_ids[i], catalog.iloc[i]['product_name'], scores[i]) for i in top_indices]
+    return [(product_ids[i], product_names[i], scores[i]) for i in top_indices]    
 
-def search_bm25(query: str, bm25, product_ids, catalog, top_k: int = 5):
+def search_bm25(query: str, bm25, product_ids, product_names, top_k: int = 5):
     tokens = query.split()
     scores = bm25.get_scores(tokens)
     top_indices = np.argsort(scores)[::-1][:top_k]
-    return [(product_ids[i], catalog.iloc[i]['product_name'], scores[i]) for i in top_indices]
+    return [(product_ids[i], product_names[i], scores[i]) for i in top_indices]
 
-def evaluate(queries_df: pd.DataFrame, search_fn, desc: str):
+def evaluate(results: list, queries_df: pd.DataFrame, desc: str):
     p_at_1 = 0
     mrr = 0.0
     r_at_5 = 0
 
-    for _, row in tqdm(queries_df.iterrows(), total=len(queries_df), desc=desc):
-        results = search_fn(row['text'], top_k=5)
-        correct_id = str(row['matched_id'])
-        returned_ids = [str(r[0]) for r in results]
+    for results_row, (_, df_row) in tqdm(zip(results, queries_df.iterrows()), total=len(queries_df), desc=desc):
+        correct_id = str(df_row['matched_id'])
+        returned_ids = [str(r[0]) for r in results_row]
 
         if returned_ids[0] == correct_id:
             p_at_1 += 1
@@ -79,51 +128,102 @@ def evaluate(queries_df: pd.DataFrame, search_fn, desc: str):
     print(f"  MRR@5= {mrr/n:.4f}")
     print(f"  R@5  = {r_at_5/n:.4f}")
 
-catalog = pd.read_csv('non_normalized/catalog.csv')
-queries_val = pd.read_csv('non_normalized/queries_val.csv')
-queries_test = pd.read_csv('non_normalized/queries_test.csv')
-queries = pd.read_csv('non_normalized/queries.csv')
+def similarity_search() -> None: 
+    global g_similarity_vocabulary_matrix, bm25
+    
+    # creating vocabulary matrix
+    g_similarity_vocabulary_matrix = tfidf_vectorizer.fit_transform(g_normalized_original_product_names)  
+    '''
+        Example:
+                      coca  cola  refrigerante  guarana  1l  ...
+        produto 0  [  0.8   0.6      0.3         0       0.4  ]
+        produto 1  [  0     0        0.3         0.9     0.4  ]
+        produto 2  [  0     0        0           0       0    ]
+        ...
+    '''
+    
+    similarity_normalized_queries_tfidf = []
+    similarity_normalized_queries_val_tfidf = []
+    similarity_normalized_queries_test_tfidf = []
+    
+    similarity_normalized_queries_bm25 = []
+    similarity_normalized_queries_val_bm25 = []
+    similarity_normalized_queries_test_bm25 = []
+    
+    for row in tqdm(g_normalized_queries, desc='Similarity Searching Queries'):
+        similarity_normalized_queries_tfidf.append(
+            search_tfidf(
+                row,
+                tfidf_vectorizer,
+                g_similarity_vocabulary_matrix,
+                g_products_available_ids,
+                g_normalized_original_product_names
+            )
+        )
+        similarity_normalized_queries_bm25.append(
+            search_bm25(
+                row,
+                bm25,
+                g_products_available_ids,
+                g_normalized_original_product_names
+            )            
+        )        
 
-catalog['normalized'] = normalize_batch(catalog['product_name'].tolist(), desc='Catálogo')
-queries_val['normalized'] = normalize_batch(queries_val['text'].tolist(), desc='Queries Val')
-queries_test['normalized'] = normalize_batch(queries_test['text'].tolist(), desc='Queries Test')
-queries['normalized'] = normalize_batch(queries['text'].tolist(), desc='Queries')
+    for row in tqdm(g_normalized_queries_val, desc='Similarity Searching Validation Queries'):
+        similarity_normalized_queries_val_tfidf.append(
+            search_tfidf(
+                row,
+                tfidf_vectorizer,
+                g_similarity_vocabulary_matrix,
+                g_products_available_ids,
+                g_normalized_original_product_names
+            )
+        )    
+        similarity_normalized_queries_val_bm25.append(
+            search_bm25(
+                row,
+                bm25,
+                g_products_available_ids,
+                g_normalized_original_product_names
+            )            
+        ) 
+    
+    for row in tqdm(g_normalized_queries_test, desc='Similarity Searching Test Queries'):
+        similarity_normalized_queries_test_tfidf.append(
+            search_tfidf(
+                row,
+                tfidf_vectorizer,
+                g_similarity_vocabulary_matrix,
+                g_products_available_ids,
+                g_normalized_original_product_names
+            )
+        )
+        similarity_normalized_queries_test_bm25.append(
+            search_bm25(
+                row,
+                bm25,
+                g_products_available_ids,
+                g_normalized_original_product_names
+            )            
+        )  
+    
+    #evaluate(similarity_normalized_queries_tfidf, g_queries, desc='TF-IDF Val') # esse tu não pode rodar, porque ele não tem a coluna matched ID
+    evaluate(similarity_normalized_queries_val_tfidf, g_queries_val, desc='TF-IDF Val')
+    evaluate(similarity_normalized_queries_test_tfidf, g_queries_test, desc='TF-IDF Test')
+    evaluate(similarity_normalized_queries_val_bm25, g_queries_val, desc='BM25 Val')
+    evaluate(similarity_normalized_queries_test_bm25, g_queries_test, desc='BM25 Test')
+    
 
-print(catalog[['product_name', 'normalized']].head())
-print(queries_val[['text', 'normalized']].head())
-print(queries_test[['text', 'normalized']].head())
-print(queries[['text', 'normalized']].head())
+def deep_learning() -> None:
+    pass
 
-catalog = catalog.drop(columns=['product_name']).rename(columns={'normalized': 'product_name'})
-queries_val = queries_val.drop(columns=['text']).rename(columns={'normalized': 'text'})
-queries_test = queries_test.drop(columns=['text']).rename(columns={'normalized': 'text'})
-queries = queries.drop(columns=['text']).rename(columns={'normalized': 'text'})
+pipeline = [
+    read_csvs,
+    configure_attributes,
+    normalize_data,
+    similarity_search,
+    deep_learning,    
+]
 
-os.makedirs('normalized', exist_ok=True)
-
-catalog.to_csv('normalized/catalog.csv', index=False)
-queries_val.to_csv('normalized/queries_val.csv', index=False)
-queries_test.to_csv('normalized/queries_test.csv', index=False)
-queries.to_csv('normalized/queries.csv', index=False)
-
-corpus = catalog['product_name'].tolist()
-product_ids = catalog['product_id'].tolist()
-
-vectorizer = TfidfVectorizer()
-catalog_matrix = vectorizer.fit_transform(corpus)  # (n_produtos, n_termos)
-
-tokenized_corpus = [doc.split() for doc in corpus]
-bm25 = BM25Okapi(tokenized_corpus)
-
-tfidf_search = partial(search_tfidf, vectorizer=vectorizer, catalog_matrix=catalog_matrix, product_ids=product_ids, catalog=catalog)
-bm25_search = partial(search_bm25, bm25=bm25, product_ids=product_ids, catalog=catalog)
-
-evaluate(queries_val, tfidf_search, desc='TF-IDF')
-evaluate(queries_val, bm25_search,  desc='BM25')
-evaluate(queries_test, tfidf_search, desc='TF-IDF')
-evaluate(queries_test, bm25_search,  desc='BM25')
-
-queries['matched_id'] = [tfidf_search(text, top_k=1)[0][0] for text in tqdm(queries['text'], desc='Predições')]
-queries.to_csv('normalized/queries_com_predicoes_tfidf.csv', index=False)
-queries['matched_id'] = [bm25_search(text, top_k=1)[0][0] for text in tqdm(queries['text'], desc='Predições')]
-queries.to_csv('normalized/queries_com_predicoes_bm25.csv', index=False)
+for func in pipeline:
+    func()
