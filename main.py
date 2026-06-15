@@ -41,7 +41,6 @@ g_normalized_queries_val = []
 g_normalized_queries_test = []
 
 g_products_available_ids = []
-g_normalized_original_product_names = []
 
 tfidf_vectorizer = TfidfVectorizer()
 
@@ -208,6 +207,7 @@ def similarity_search() -> None:
         )  
     
     #evaluate(similarity_normalized_queries_tfidf, g_queries, desc='TF-IDF Val') # esse tu não pode rodar, porque ele não tem a coluna matched ID
+    #evaluate(similarity_normalized_queries_bm25, g_queries, desc='TF-IDF Val') # esse tu não pode rodar, porque ele não tem a coluna matched ID
     evaluate(similarity_normalized_queries_val_tfidf, g_queries_val, desc='TF-IDF Val')
     evaluate(similarity_normalized_queries_test_tfidf, g_queries_test, desc='TF-IDF Test')
     evaluate(similarity_normalized_queries_val_bm25, g_queries_val, desc='BM25 Val')
