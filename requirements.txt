@@ -1,0 +1,9 @@
+nltk
+scikit-learn
+rank-bm25
+pandas
+tqdm
+python-dotenv
+google-genai
+anthropic
+sentence-transformers
