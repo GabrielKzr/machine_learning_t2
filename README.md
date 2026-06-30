@@ -2,7 +2,7 @@
 
 ## Integrantes
 
-- Gabriel Kaizer — Matrícula: 000000
+- Gabriel Kaizer — Matrícula: 22111135
 - João Pedro Antunes — Matrícula: 22107504
 - Vinicius Mibielli — Matrícula: 22107795
 
@@ -182,6 +182,6 @@ python3 parse_log.py
 
 ## Observações
 
-- **TF-IDF** apresentou o melhor desempenho no conjunto de **teste**, além de baixa latência (~2 s) e não depender de serviços externos.
-- O re-ranqueamento por **LLMs** (Gemini/Claude) obteve a melhor precisão na **validação**, porém com custo de API e maior tempo de execução (~24 min).
+- **TF-IDF** apresentou o melhor desempenho no conjunto de **teste**, além de baixa latência e não depender de serviços externos.
+- O re-ranqueamento por **LLMs** (Gemini/Claude) obteve a melhor precisão na **validação**, porém com custo de API e maior tempo de execução.
 - Os embeddings semânticos (*Sentence-Transformers*) tiveram desempenho inferior às abordagens baseadas em recuperação lexical para este conjunto de dados.
