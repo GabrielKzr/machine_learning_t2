@@ -74,6 +74,24 @@ def parse_zero_shot_log(log_text: str):
     return results
 
 
+def parse_times(log_text):
+    pattern = re.compile(
+        r"Zero-shot (Val|Test):\s+100%.*?\[(\d+):(\d+)<",
+        re.MULTILINE
+    )
+
+    times = {"Val": [], "Test": []}
+
+    for stage, minutes, seconds in pattern.findall(log_text):
+        total_seconds = int(minutes) * 60 + int(seconds)
+        times[stage].append(total_seconds)
+
+    val_time = times["Val"][-1] if times["Val"] else None
+    test_time = times["Test"][-1] if times["Test"] else None
+
+    return val_time, test_time
+
+
 def evaluate(results: list, queries_df: pd.DataFrame, desc: str):
     p_at_1 = 0
     mrr = 0.0
@@ -102,19 +120,54 @@ def evaluate(results: list, queries_df: pd.DataFrame, desc: str):
 
 
 if __name__ == "__main__":
-    log_path = sys.argv[1] if len(sys.argv) > 1 else "deep_learning_results/log_zeroshot_results.txt"
-    queries_val_path = sys.argv[2] if len(sys.argv) > 2 else "non_normalized/queries_val.csv"
+    log_path = (
+        sys.argv[1]
+        if len(sys.argv) > 1
+        else "deep_learning_results/log_zeroshot_results.txt"
+    )
+
+    queries_val_path = (
+        sys.argv[2]
+        if len(sys.argv) > 2
+        else "non_normalized/queries_val.csv"
+    )
+
+    queries_test_path = (
+        sys.argv[3]
+        if len(sys.argv) > 3
+        else "non_normalized/queries_test.csv"
+    )
 
     print(f"Lendo log: {log_path}")
     with open(log_path, "r") as f:
         log_text = f.read()
 
     results = parse_zero_shot_log(log_text)
+    
+    val_time, test_time = parse_times(log_text)
 
     queries_val = pd.read_csv(queries_val_path)
+    queries_test = pd.read_csv(queries_test_path)
 
-    if len(results) != len(queries_val):
-        print(f"[WARN] {len(results)} resultados vs {len(queries_val)} queries — usando os primeiros {len(results)}")
-        queries_val = queries_val.iloc[:len(results)]
+    n_val = len(queries_val)
+    n_test = len(queries_test)
 
-    evaluate(results, queries_val, desc="Zero-shot Val (do log)")
+    if len(results) < n_val + n_test:
+        print(
+            f"[ERRO] O log possui apenas {len(results)} resultados, "
+            f"mas eram esperados {n_val + n_test}."
+        )
+        sys.exit(1)
+
+    results_val = results[:n_val]
+    results_test = results[n_val:n_val + n_test]
+
+    evaluate(results_val, queries_val, desc="Zero-shot Val")
+    
+    if val_time is not None:
+        print(f"Tempo Validação: {val_time/60:.2f} min")
+
+    evaluate(results_test, queries_test, desc="Zero-shot Test")
+    
+    if test_time is not None:
+        print(f"Tempo Teste: {test_time/60:.2f} min")
